@@ -363,10 +363,13 @@ func (c *Client) StreamJobEvents(appID string) (*JobEventStream, error) {
 	return stream, nil
 }
 
-func (c *Client) GetJobLog(appID, jobID string, tail bool) (io.ReadCloser, error) {
+func (c *Client) GetJobLog(appID, jobID string, tail bool, lines string) (io.ReadCloser, error) {
 	path := fmt.Sprintf("/apps/%s/jobs/%s/log", appID, jobID)
 	if tail {
 		path += "?tail=true"
+	}
+	if lines != "" {
+		path += "?lines=" + lines
 	}
 	res, err := c.rawReq("GET", path, nil, nil, nil)
 	if err != nil {
