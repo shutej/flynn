@@ -202,10 +202,11 @@ type Response struct {
 
 const lastStreamResponseError = "EOS"
 
+type Logger func(*RequestLogEntry)
+
 // Server represents an RPC Server.
 type Server struct {
-	Logger      func(*RequestLogEntry) // allows for variadic configuration of a logging function
-	mu          sync.Mutex             // protects the serviceMap
+	mu          sync.Mutex // protects the serviceMap
 	serviceMap  map[string]*service
 	reqLock     sync.Mutex // protects freeReq
 	freeReq     *Request
@@ -221,15 +222,6 @@ func NewServer() *Server {
 
 // DefaultServer is the default instance of *Server.
 var DefaultServer = NewServer()
-
-// maybeLog notifies a logger of a new RequestLogEntry if the Logger is set
-func (server *Server) maybeLog(item *RequestLogEntry) {
-	if server.Logger != nil {
-		item.End = time.Now()
-		item.Duration = int64(item.End.Sub(item.Start) / time.Millisecond)
-		server.Logger(item)
-	}
-}
 
 // Is this an exported - upper case - name?
 func isExported(name string) bool {
@@ -552,31 +544,27 @@ func (c *gobServerCodec) Close() error {
 // The caller typically invokes ServeConn in a go statement.
 // ServeConn uses the gob wire format (see package gob) on the
 // connection.  To use an alternate codec, use ServeCodec.
-func (server *Server) ServeConn(conn io.ReadWriteCloser, options ...func(*Server)) {
-	server.ServeConnWithContext(conn, nil, options...)
+func (server *Server) ServeConn(conn io.ReadWriteCloser, loggers ...Logger) {
+	server.ServeConnWithContext(conn, nil, loggers...)
 }
 
 // ServeConnWithContext is like ServeConn but makes it possible to
 // pass a connection context to the RPC methods.
-func (server *Server) ServeConnWithContext(conn io.ReadWriteCloser, context interface{}, options ...func(*Server)) {
+func (server *Server) ServeConnWithContext(conn io.ReadWriteCloser, context interface{}, loggers ...Logger) {
 	buf := bufio.NewWriter(conn)
 	srv := &gobServerCodec{conn, gob.NewDecoder(conn), gob.NewEncoder(buf), buf}
-	server.ServeCodecWithContext(srv, context, options...)
+	server.ServeCodecWithContext(srv, context, loggers...)
 }
 
 // ServeCodec is like ServeConn but uses the specified codec to
 // decode requests and encode responses.
-func (server *Server) ServeCodec(codec ServerCodec, options ...func(*Server)) {
-	server.ServeCodecWithContext(codec, nil, options...)
+func (server *Server) ServeCodec(codec ServerCodec, loggers ...Logger) {
+	server.ServeCodecWithContext(codec, nil, loggers...)
 }
 
 // ServeCodecWithContext is like ServeCodec but it makes it possible
 // to pass a connection context to the RPC methods.
-func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface{}, options ...func(*Server)) {
-	for _, option := range options {
-		option(server)
-	}
-
+func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface{}, loggers ...Logger) {
 	sending := new(sync.Mutex)
 	eof := make(chan struct{})
 
@@ -591,6 +579,25 @@ func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface
 	}
 
 	requestLogMap := make(map[uint64]*RequestLogEntry)
+	var requestLogMapMtx sync.Mutex
+
+	maybeLog := func(seq uint64) {
+		requestLogMapMtx.Lock()
+		defer requestLogMapMtx.Unlock()
+		// Modify the entry.
+		entry, ok := requestLogMap[seq]
+		if !ok {
+			log.Panicf("XXX(j): This is totally fucked: %v", seq)
+		}
+		entry.End = time.Now()
+		entry.Duration = int64(entry.End.Sub(entry.Start) / time.Millisecond)
+
+		for _, logger := range loggers {
+			logger(entry)
+		}
+
+		delete(requestLogMap, seq)
+	}
 
 	for {
 		service, mtype, req, argv, replyv, keepReading, err := server.readRequest(codec)
@@ -603,8 +610,7 @@ func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface
 					stop, ok := stopChans[seq]
 					delete(stopChans, seq)
 					stopChansMtx.Unlock()
-					server.maybeLog(requestLogMap[seq])
-					delete(requestLogMap, seq)
+					maybeLog(seq)
 					if !ok {
 						return
 					}
@@ -622,11 +628,13 @@ func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface
 			}
 			continue
 		}
+		requestLogMapMtx.Lock()
 		requestLogMap[req.Seq] = &RequestLogEntry{
 			RequestId:     req.Seq,
 			Start:         time.Now(),
 			RequestMethod: &req.ServiceMethod,
 		}
+		requestLogMapMtx.Unlock()
 		done := make(chan struct{})
 		stop := make(chan struct{})
 		stopChansMtx.Lock()
@@ -638,8 +646,7 @@ func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface
 			stopChansMtx.Lock()
 			delete(stopChans, seq)
 			stopChansMtx.Unlock()
-			server.maybeLog(requestLogMap[seq])
-			delete(requestLogMap, seq)
+			maybeLog(seq)
 		}(req.Seq)
 
 		go service.call(call{
