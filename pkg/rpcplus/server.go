@@ -573,6 +573,10 @@ func (server *Server) ServeCodec(codec ServerCodec, options ...func(*Server)) {
 // ServeCodecWithContext is like ServeCodec but it makes it possible
 // to pass a connection context to the RPC methods.
 func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface{}, options ...func(*Server)) {
+	for _, option := range options {
+		option(server)
+	}
+
 	sending := new(sync.Mutex)
 	eof := make(chan struct{})
 
@@ -782,7 +786,7 @@ func (server *Server) Accept(lis net.Listener) {
 		if err != nil {
 			log.Fatal("rpc.Serve: accept:", err.Error()) // TODO(r): exit?
 		}
-		go server.ServeConn(conn, nil)
+		go server.ServeConn(conn)
 	}
 }
 
@@ -859,7 +863,7 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	io.WriteString(conn, "HTTP/1.0 "+connected+"\n\n")
-	server.ServeConn(conn, nil)
+	server.ServeConn(conn)
 }
 
 // HandleHTTP registers an HTTP handler for RPC messages on rpcPath,
