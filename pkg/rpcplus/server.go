@@ -587,7 +587,8 @@ func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface
 		// Modify the entry.
 		entry, ok := requestLogMap[seq]
 		if !ok {
-			log.Panicf("XXX(j): This is totally fucked: %v", seq)
+			log.Printf("rpc warning: received bad seqnum %v", seq)
+			return
 		}
 		entry.End = time.Now()
 		entry.Duration = int64(entry.End.Sub(entry.Start) / time.Millisecond)
