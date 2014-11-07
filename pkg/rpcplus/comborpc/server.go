@@ -26,13 +26,13 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	var serve func(conn io.ReadWriteCloser, logger *func(*rpcplus.RequestLogItem))
+	var serve func(conn io.ReadWriteCloser, options ...func(*rpcplus.Server))
 	accept, _, _ := mime.ParseMediaType(req.Header.Get("Accept"))
 	switch accept {
 	case "application/vnd.flynn.rpc-hijack+json":
-		serve = func(conn io.ReadWriteCloser, logger *func(*rpcplus.RequestLogItem)) {
+		serve = func(conn io.ReadWriteCloser, options ...func(*rpcplus.Server)) {
 			codec := jsonrpc.NewServerCodec(conn)
-			server.s.ServeCodec(codec, nil)
+			server.s.ServeCodec(codec, options...)
 		}
 	default:
 		serve = server.s.ServeConn
@@ -44,7 +44,7 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 	conn.Write([]byte("HTTP/1.0 200 Connected to Go RPC\n\n"))
-	serve(conn, nil)
+	serve(conn)
 }
 
 func (server *Server) HandleHTTP(path string) {

@@ -146,21 +146,13 @@ const (
 	DefaultDebugPath = "/debug/rpc"
 )
 
-func maybeLog(logger *func(*RequestLogItem), item *RequestLogItem) {
-	if logger != nil {
-		item.End = time.Now()
-		item.Duration = int64(item.End.Sub(item.Start) / time.Millisecond)
-		(*logger)(item)
-	}
-}
-
 // Precompute the reflect type for error.  Can't use error directly
 // because Typeof takes an empty interface value.  This is annoying.
 var typeOfError = reflect.TypeOf((*error)(nil)).Elem()
 
-// RequestLogItem: a request/response log entry that includes
+// RequestLogEntry: a request/response log entry that includes
 // timing information and the full RPC method name
-type RequestLogItem struct {
+type RequestLogEntry struct {
 	RequestId     uint64    `json:"request_id"`
 	Start         time.Time `json:"start"`
 	End           time.Time `json:"end"`
@@ -212,7 +204,8 @@ const lastStreamResponseError = "EOS"
 
 // Server represents an RPC Server.
 type Server struct {
-	mu          sync.Mutex // protects the serviceMap
+	Logger      func(*RequestLogEntry) // allows for variadic configuration of a logging function
+	mu          sync.Mutex             // protects the serviceMap
 	serviceMap  map[string]*service
 	reqLock     sync.Mutex // protects freeReq
 	freeReq     *Request
@@ -228,6 +221,15 @@ func NewServer() *Server {
 
 // DefaultServer is the default instance of *Server.
 var DefaultServer = NewServer()
+
+// maybeLog notifies a logger of a new RequestLogEntry if the Logger is set
+func (server *Server) maybeLog(item *RequestLogEntry) {
+	if server.Logger != nil {
+		item.End = time.Now()
+		item.Duration = int64(item.End.Sub(item.Start) / time.Millisecond)
+		server.Logger(item)
+	}
+}
 
 // Is this an exported - upper case - name?
 func isExported(name string) bool {
@@ -550,27 +552,27 @@ func (c *gobServerCodec) Close() error {
 // The caller typically invokes ServeConn in a go statement.
 // ServeConn uses the gob wire format (see package gob) on the
 // connection.  To use an alternate codec, use ServeCodec.
-func (server *Server) ServeConn(conn io.ReadWriteCloser, logger *func(*RequestLogItem)) {
-	server.ServeConnWithContext(conn, nil, logger)
+func (server *Server) ServeConn(conn io.ReadWriteCloser, options ...func(*Server)) {
+	server.ServeConnWithContext(conn, nil, options...)
 }
 
 // ServeConnWithContext is like ServeConn but makes it possible to
 // pass a connection context to the RPC methods.
-func (server *Server) ServeConnWithContext(conn io.ReadWriteCloser, context interface{}, logger *func(*RequestLogItem)) {
+func (server *Server) ServeConnWithContext(conn io.ReadWriteCloser, context interface{}, options ...func(*Server)) {
 	buf := bufio.NewWriter(conn)
 	srv := &gobServerCodec{conn, gob.NewDecoder(conn), gob.NewEncoder(buf), buf}
-	server.ServeCodecWithContext(srv, context, logger)
+	server.ServeCodecWithContext(srv, context, options...)
 }
 
 // ServeCodec is like ServeConn but uses the specified codec to
 // decode requests and encode responses.
-func (server *Server) ServeCodec(codec ServerCodec, logger *func(*RequestLogItem)) {
-	server.ServeCodecWithContext(codec, nil, logger)
+func (server *Server) ServeCodec(codec ServerCodec, options ...func(*Server)) {
+	server.ServeCodecWithContext(codec, nil, options...)
 }
 
 // ServeCodecWithContext is like ServeCodec but it makes it possible
 // to pass a connection context to the RPC methods.
-func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface{}, logger *func(*RequestLogItem)) {
+func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface{}, options ...func(*Server)) {
 	sending := new(sync.Mutex)
 	eof := make(chan struct{})
 
@@ -584,7 +586,7 @@ func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface
 		contextVal = reflect.New(server.contextType)
 	}
 
-	requestLogMap := make(map[uint64]*RequestLogItem)
+	requestLogMap := make(map[uint64]*RequestLogEntry)
 
 	for {
 		service, mtype, req, argv, replyv, keepReading, err := server.readRequest(codec)
@@ -597,7 +599,7 @@ func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface
 					stop, ok := stopChans[seq]
 					delete(stopChans, seq)
 					stopChansMtx.Unlock()
-					maybeLog(logger, requestLogMap[seq])
+					server.maybeLog(requestLogMap[seq])
 					delete(requestLogMap, seq)
 					if !ok {
 						return
@@ -616,7 +618,7 @@ func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface
 			}
 			continue
 		}
-		requestLogMap[req.Seq] = &RequestLogItem{
+		requestLogMap[req.Seq] = &RequestLogEntry{
 			RequestId:     req.Seq,
 			Start:         time.Now(),
 			RequestMethod: &req.ServiceMethod,
@@ -632,7 +634,7 @@ func (server *Server) ServeCodecWithContext(codec ServerCodec, context interface
 			stopChansMtx.Lock()
 			delete(stopChans, seq)
 			stopChansMtx.Unlock()
-			maybeLog(logger, requestLogMap[seq])
+			server.maybeLog(requestLogMap[seq])
 			delete(requestLogMap, seq)
 		}(req.Seq)
 
@@ -813,26 +815,26 @@ type ServerCodec interface {
 // The caller typically invokes ServeConn in a go statement.
 // ServeConn uses the gob wire format (see package gob) on the
 // connection.  To use an alternate codec, use ServeCodec.
-func ServeConn(conn io.ReadWriteCloser, logger *func(*RequestLogItem)) {
-	ServeConnWithContext(conn, nil, logger)
+func ServeConn(conn io.ReadWriteCloser) {
+	ServeConnWithContext(conn, nil)
 }
 
 // ServeConnWithContext is like ServeConn but it allows to pass a
 // connection context to the RPC methods.
-func ServeConnWithContext(conn io.ReadWriteCloser, context interface{}, logger *func(*RequestLogItem)) {
-	DefaultServer.ServeConnWithContext(conn, context, logger)
+func ServeConnWithContext(conn io.ReadWriteCloser, context interface{}) {
+	DefaultServer.ServeConnWithContext(conn, context)
 }
 
 // ServeCodec is like ServeConn but uses the specified codec to
 // decode requests and encode responses.
-func ServeCodec(codec ServerCodec, logger *func(*RequestLogItem)) {
-	ServeCodecWithContext(codec, nil, logger)
+func ServeCodec(codec ServerCodec) {
+	ServeCodecWithContext(codec, nil)
 }
 
 // ServeCodecWithContext is like ServeCodec but it allows to pass a
 // connection context to the RPC methods.
-func ServeCodecWithContext(codec ServerCodec, context interface{}, logger *func(*RequestLogItem)) {
-	DefaultServer.ServeCodecWithContext(codec, context, logger)
+func ServeCodecWithContext(codec ServerCodec, context interface{}) {
+	DefaultServer.ServeCodecWithContext(codec, context)
 }
 
 // Accept accepts connections on the listener and serves requests

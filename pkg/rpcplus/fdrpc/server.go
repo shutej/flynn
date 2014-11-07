@@ -101,14 +101,14 @@ func ListenAndServe(path string) error {
 		}
 		go func() {
 			defer conn.Close()
-			ServeConn(conn, nil)
+			ServeConn(conn)
 		}()
 	}
 }
 
-func ServeConn(conn *net.UnixConn, logger *func(*rpcplus.RequestLogItem)) {
+func ServeConn(conn *net.UnixConn) {
 	fdWriter := NewFDWriter(conn)
 	buf := bufio.NewWriter(fdWriter)
 	srv := &gobServerCodec{fdWriter, gob.NewDecoder(fdWriter), gob.NewEncoder(buf), buf}
-	rpcplus.ServeCodec(srv, logger)
+	rpcplus.ServeCodec(srv)
 }
