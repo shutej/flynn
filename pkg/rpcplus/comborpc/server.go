@@ -26,13 +26,13 @@ func (server *Server) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		return
 	}
 
-	var serve func(conn io.ReadWriteCloser)
+	var serve func(conn io.ReadWriteCloser, loggers ...rpcplus.Logger)
 	accept, _, _ := mime.ParseMediaType(req.Header.Get("Accept"))
 	switch accept {
 	case "application/vnd.flynn.rpc-hijack+json":
-		serve = func(conn io.ReadWriteCloser) {
+		serve = func(conn io.ReadWriteCloser, loggers ...rpcplus.Logger) {
 			codec := jsonrpc.NewServerCodec(conn)
-			server.s.ServeCodec(codec)
+			server.s.ServeCodec(codec, loggers...)
 		}
 	default:
 		serve = server.s.ServeConn
