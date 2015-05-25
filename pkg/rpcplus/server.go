@@ -363,10 +363,6 @@ func (server *Server) register(rcvr interface{}, name string, useName bool) erro
 	for m := 0; m < s.typ.NumMethod(); m++ {
 		method := s.typ.Method(m)
 		if mt := prepareMethod(method); mt != nil {
-			if mt.ContextType != nil && mt.ContextType != reflect.PtrTo(server.contextType) {
-				log.Println("method", method.Name, "has wrong context type:", mt.ContextType, "want", reflect.PtrTo(server.contextType))
-				continue
-			}
 			s.method[method.Name] = mt
 		}
 	}
